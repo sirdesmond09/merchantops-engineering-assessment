@@ -87,20 +87,10 @@ class Command(BaseCommand):
         def single(path, **params):
             return lambda: [(path, params)]
 
-        def catalogue_screen(**params):
-            # The catalogue view loads the list, then one detail per row.
-            def build():
-                listing = self.get("", params).json()
-                return [("", params)] + [
-                    (f"{item['id']}/", {}) for item in listing["results"]
-                ]
-
-            return build
-
         # Each screen is the list of API calls its Vue view makes.
         screens = [
-            ("Product list page", catalogue_screen()),
-            ("Product list page, searching", catalogue_screen(search=BROAD_SEARCH)),
+            ("Product list page", single("")),
+            ("Product list page, searching", single("", search=BROAD_SEARCH)),
             (
                 "Product page, 2 variants",
                 lambda: [(f"{standard}/editor/", {}), (f"{standard}/", {})],

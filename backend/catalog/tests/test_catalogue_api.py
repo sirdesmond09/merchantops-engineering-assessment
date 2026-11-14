@@ -1,5 +1,7 @@
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from catalog.models import Category, Merchant, Product
@@ -167,3 +169,27 @@ class ProductListAPITests(TestCase):
 
         self.assertEqual(second.status_code, 200)
         self.assertEqual(len(second.data["results"]), 6)
+
+    def test_query_count_does_not_grow_with_products(self):
+        params = {"merchant_id": self.merchant.pk}
+
+        with CaptureQueriesContext(connection) as one_product:
+            self.client.get(self.url, params)
+
+        Product.objects.bulk_create(
+            [
+                Product(
+                    merchant=self.merchant,
+                    category=self.product.category,
+                    name=f"Additional Product {number}",
+                    sku=f"ADD-{number:03d}",
+                )
+                for number in range(20)
+            ]
+        )
+
+        with CaptureQueriesContext(connection) as many_products:
+            response = self.client.get(self.url, params)
+
+        self.assertEqual(len(response.data["results"]), 21)
+        self.assertEqual(len(many_products), len(one_product))

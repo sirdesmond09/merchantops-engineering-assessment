@@ -17,33 +17,7 @@ const { data, loading, error, load } = useResource()
 let searchTimer
 
 function fetchPage() {
-  load(async (signal) => {
-    const catalogue = await products.list(
-      search.value,
-      page.value,
-      signal,
-    )
-
-    // Load each product's detail before displaying the catalogue.
-    // The catalogue is rendered only after all records are hydrated.
-    const hydrated = []
-
-    for (const item of catalogue.results) {
-      const detail = await products.detail(item.id, signal)
-      hydrated.push({
-        ...item,
-        name: detail.name,
-        sku: detail.sku,
-        status: detail.status,
-        image_url: detail.image_url,
-      })
-    }
-
-    return {
-      ...catalogue,
-      results: hydrated,
-    }
-  })
+  load((signal) => products.list(search.value, page.value, signal))
 }
 
 watch([search, page], () => {

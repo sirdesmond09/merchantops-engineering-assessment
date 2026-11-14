@@ -51,7 +51,11 @@ class ProductListView(generics.ListAPIView):
             pk=merchant_id,
         )
 
-        queryset = Product.objects.filter(merchant_id=merchant_id).order_by("id")
+        queryset = (
+            Product.objects.filter(merchant_id=merchant_id)
+            .select_related("category")
+            .order_by("id")
+        )
 
         search = self.request.query_params.get("search", "").strip()
 
