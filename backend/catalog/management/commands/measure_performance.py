@@ -91,14 +91,8 @@ class Command(BaseCommand):
         screens = [
             ("Product list page", single("")),
             ("Product list page, searching", single("", search=BROAD_SEARCH)),
-            (
-                "Product page, 2 variants",
-                lambda: [(f"{standard}/editor/", {}), (f"{standard}/", {})],
-            ),
-            (
-                "Product page, 50 variants",
-                lambda: [(f"{complex_}/editor/", {}), (f"{complex_}/", {})],
-            ),
+            ("Product page, 2 variants", single(f"{standard}/editor/")),
+            ("Product page, 50 variants", single(f"{complex_}/editor/")),
             (
                 "Product activity page",
                 lambda: [(f"{standard}/", {}), (f"{standard}/activity/", {})],

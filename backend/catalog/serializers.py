@@ -77,6 +77,7 @@ class ProductEditorSerializer(serializers.ModelSerializer):
             "sku",
             "description",
             "status",
+            "image_url",
             "category",
             "variants",
             "availability",
@@ -121,12 +122,12 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
     def validate_sku(self, value):
         product = self.instance
 
-        duplicates = Product.objects.filter(
+        duplicate = Product.objects.filter(
             merchant_id=product.merchant_id,
             sku=value,
-        ).exclude(pk=product.pk)
+        ).exclude(pk=product.pk).exists()
 
-        if duplicates.exists():
+        if duplicate:
             raise serializers.ValidationError(
                 "A product with this SKU already exists " "for this merchant."
             )

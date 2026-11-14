@@ -200,3 +200,15 @@ class ProductEditorAPITests(TestCase):
         self.assertEqual(variant["sku"], "WORK-001-NONE")
         self.assertIsNone(variant["inventory"])
         self.assertEqual(variant["prices"], [])
+
+    def test_editor_includes_image_path(self):
+        Product.objects.filter(pk=self.product.pk).update(
+            image_url="/product-images/laptop.webp"
+        )
+
+        response = self.client.get(
+            self.editor_url(self.product),
+            {"merchant_id": self.merchant.pk},
+        )
+
+        self.assertEqual(response.data["image_url"], "/product-images/laptop.webp")

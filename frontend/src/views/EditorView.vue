@@ -31,13 +31,7 @@ const tiers = computed(() => [...new Set([
 ])])
 
 function readEditor() {
-  load(async (signal) => {
-    const [editor, detail] = await Promise.all([
-      products.editor(id, signal),
-      products.detail(id, signal),
-    ])
-    return { ...editor, image_url: detail.image_url }
-  })
+  load((signal) => products.editor(id, signal))
 }
 
 function resetForm(source) {
