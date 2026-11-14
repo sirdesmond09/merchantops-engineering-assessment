@@ -46,61 +46,49 @@ It signs in as `demo_operator`, calls the product API in-process with Django's t
 - **DB time:** time spent waiting on MySQL.
 - **Server time:** time for the server to produce the responses. No network delay is included.
 
-The two counts are exact and identical on every run. Times are the median of 5 runs after 1 warm-up run and vary slightly between runs.
+The two counts are exact and identical on every run. Times depend on how busy the machine is, so a "before" and an "after" taken at different moments are not comparable. The times below were therefore taken back to back.
 
-### Before: original code
+### Results: issues 1, 2 and 3 fixed
 
-Work the server does to show each screen:
+Taken on 14 November 2026 on one machine. I checked out the original code (the commit that adds the measurement command), ran the command, then checked out the fixed code and ran it again, and repeated the pair a second time. Each run used `--runs 30`, so every time is the median of 30 loads after 1 warm-up. Both rounds are shown as `round 1 / round 2`.
 
-| Screen | HTTP requests | DB queries | Server time ms |
-| --- | ---: | ---: | ---: |
-| Product list page | 26 | 130 | 35.1 |
-| Product list page, searching | 26 | 130 | 38.1 |
-| Product page, 2 variants | 2 | 14 | 3.3 |
-| Product page, 50 variants | 2 | 110 | 18.8 |
-| Product activity page | 2 | 9 | 2.7 |
-
-One call to each API endpoint:
-
-| What the call returns | API URL | DB queries | DB time ms | Server time ms | Response bytes |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Product list, first page | `/api/products/` | 30 | 1.1 | 4.8 | 3926 |
-| Product list, last page | `/api/products/?page=100` | 30 | 3.2 | 6.8 | 3984 |
-| Product search, many matches | `/api/products/?search=assessment` | 30 | 2.0 | 5.6 | 3944 |
-| Product search, one match | `/api/products/?search=000123` | 6 | 1.6 | 3.0 | 206 |
-| Product basic fields | `/api/products/5/` | 4 | 0.2 | 1.2 | 224 |
-| Full product, 2 variants | `/api/products/5/editor/` | 10 | 0.4 | 2.0 | 746 |
-| Full product, 50 variants | `/api/products/1/editor/` | 106 | 3.6 | 17.3 | 11233 |
-| Product activity history | `/api/products/5/activity/` | 5 | 0.2 | 1.5 | 52 |
-
-### After: issues 1, 2 and 3 fixed
+```bash
+git checkout 6569a4a   # "Add measure_performance command", the original code
+docker compose exec backend python manage.py measure_performance --runs 30
+git checkout main
+docker compose exec backend python manage.py measure_performance --runs 30
+```
 
 Work the server does to show each screen:
 
 | Screen | HTTP requests before | HTTP requests after | DB queries before | DB queries after | Server time ms before | Server time ms after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Product list page | 26 | 1 | 130 | 5 | 35.1 | 2.2 |
-| Product list page, searching | 26 | 1 | 130 | 5 | 38.1 | 3.2 |
-| Product page, 2 variants | 2 | 2 | 14 | 11 | 3.3 | 3.7 |
-| Product page, 50 variants | 2 | 2 | 110 | 11 | 18.8 | 5.9 |
-| Product activity page | 2 | 2 | 9 | 9 | 2.7 | 2.7 |
+| Product list page | 26 | 1 | 130 | 5 | 59.9 / 54.3 | 2.9 / 2.9 |
+| Product list page, searching | 26 | 1 | 130 | 5 | 58.9 / 60.8 | 4.5 / 4.5 |
+| Product page, 2 variants | 2 | 2 | 14 | 11 | 5.5 / 5.2 | 5.2 / 5.5 |
+| Product page, 50 variants | 2 | 2 | 110 | 11 | 29.4 / 28.7 | 8.2 / 9.9 |
+| Product activity page | 2 | 2 | 9 | 9 | 4.1 / 4.2 | 3.9 / 4.5 |
 
 One call to each API endpoint:
 
-| What the call returns | DB queries before | DB queries after | Server time ms before | Server time ms after | Response bytes before | Response bytes after |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Product list, first page | 30 | 5 | 4.8 | 1.9 | 3926 | 3926 |
-| Product list, last page | 30 | 5 | 6.8 | 5.8 | 3984 | 3984 |
-| Product search, many matches | 30 | 5 | 5.6 | 3.0 | 3944 | 3944 |
-| Product search, one match | 6 | 5 | 3.0 | 3.0 | 206 | 206 |
-| Product basic fields | 4 | 4 | 1.2 | 1.2 | 224 | 224 |
-| Full product, 2 variants | 10 | 7 | 2.0 | 2.4 | 746 | 746 |
-| Full product, 50 variants | 106 | 7 | 17.3 | 4.4 | 11233 | 11233 |
-| Product activity history | 5 | 5 | 1.5 | 1.4 | 52 | 52 |
+| What the call returns | API URL | DB queries before | DB queries after | Server time ms before | Server time ms after |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Product list, first page | `/api/products/` | 30 | 5 | 7.1 / 7.8 | 2.8 / 2.9 |
+| Product list, last page | `/api/products/?page=100` | 30 | 5 | 10.2 / 10.8 | 7.7 / 7.9 |
+| Product search, many matches | `/api/products/?search=assessment` | 30 | 5 | 8.5 / 8.7 | 5.0 / 4.4 |
+| Product search, one match | `/api/products/?search=000123` | 6 | 5 | 4.4 / 4.3 | 4.5 / 4.9 |
+| Product basic fields | `/api/products/5/` | 4 | 4 | 1.9 / 2.0 | 1.9 / 1.9 |
+| Full product, 2 variants | `/api/products/5/editor/` | 10 | 7 | 3.1 / 3.1 | 3.6 / 4.0 |
+| Full product, 50 variants | `/api/products/1/editor/` | 106 | 7 | 25.8 / 27.0 | 6.6 / 6.9 |
+| Product activity history | `/api/products/5/activity/` | 5 | 5 | 2.1 / 2.2 | 2.2 / 2.2 |
 
-The response sizes are unchanged, and the JSON returned by the list, search, full product, basic fields and activity calls was compared byte for byte before and after the changes and is identical.
+What the results show:
 
-The full product call for a 2 variant product is slightly slower in server time (2.0 ms to 2.4 ms) even though it runs fewer queries. That call now builds its response with serializers instead of hand-written dictionaries, which costs a little processing time. The difference is within normal run-to-run variation.
+- The product list page went from 26 requests and 130 queries to 1 request and 5 queries.
+- The full product call no longer grows with the number of variants: 7 queries for both a 2 variant and a 50 variant product.
+- The response size of every call is unchanged, and the JSON returned by the list, search, full product, basic fields and activity calls was compared byte for byte before and after and is identical.
+- The two calls that were not changed (basic fields and activity history) show the same times before and after, which confirms the two sets of runs are comparable.
+- The full product call for a 2 variant product is about 0.5 to 0.9 ms slower even though it runs 3 fewer queries. It now builds its response with serializers instead of hand-written dictionaries, which costs some processing time. For a product with many variants the saving in queries far outweighs that cost.
 
 ### Limits of these measurements
 
