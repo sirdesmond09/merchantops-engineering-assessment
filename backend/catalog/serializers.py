@@ -2,7 +2,15 @@ import re
 
 from rest_framework import serializers
 
-from catalog.models import AuditLog, Category, Product
+from catalog.models import (
+    AuditLog,
+    Availability,
+    Category,
+    Inventory,
+    PriceRule,
+    Product,
+    ProductVariant,
+)
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -20,6 +28,58 @@ class ProductListSerializer(serializers.ModelSerializer):
             "status",
             "category",
             "image_url",
+        ]
+
+
+class CategorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Category
+        fields = ["id", "name"]
+
+
+class PriceRuleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = PriceRule
+        fields = ["id", "tier", "amount"]
+
+
+class InventorySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Inventory
+        fields = ["id", "quantity", "reserved"]
+
+
+class ProductVariantSerializer(serializers.ModelSerializer):
+    prices = PriceRuleSerializer(source="price_rules", many=True)
+    inventory = InventorySerializer(allow_null=True)
+
+    class Meta:
+        model = ProductVariant
+        fields = ["id", "name", "sku", "prices", "inventory"]
+
+
+class AvailabilitySerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Availability
+        fields = ["id", "channel", "enabled"]
+
+
+class ProductEditorSerializer(serializers.ModelSerializer):
+    category = CategorySerializer()
+    variants = ProductVariantSerializer(many=True)
+    availability = AvailabilitySerializer(many=True)
+
+    class Meta:
+        model = Product
+        fields = [
+            "id",
+            "name",
+            "sku",
+            "description",
+            "status",
+            "category",
+            "variants",
+            "availability",
         ]
 
 

@@ -1,5 +1,5 @@
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, permissions
 from rest_framework.exceptions import ValidationError
@@ -10,7 +10,6 @@ from rest_framework.views import APIView
 from catalog.models import (
     AuditLog,
     Availability,
-    Inventory,
     Merchant,
     PriceRule,
     Product,
@@ -18,6 +17,7 @@ from catalog.models import (
 )
 from catalog.serializers import (
     ProductActivitySerializer,
+    ProductEditorSerializer,
     ProductListSerializer,
     ProductUpdateSerializer,
 )
@@ -89,77 +89,26 @@ class ProductEditorView(APIView):
             pk=merchant_id,
         )
 
+        # Load everything the editor shows in a fixed number of queries,
+        # however many variants the product has.
+        variants = (
+            ProductVariant.objects.select_related("inventory")
+            .prefetch_related(
+                Prefetch("price_rules", queryset=PriceRule.objects.order_by("id"))
+            )
+            .order_by("id")
+        )
+
         product = get_object_or_404(
-            Product.objects.select_related("category"),
+            Product.objects.select_related("category").prefetch_related(
+                Prefetch("variants", queryset=variants),
+                Prefetch("availability", queryset=Availability.objects.order_by("id")),
+            ),
             pk=pk,
             merchant_id=merchant_id,
         )
 
-        variants = list(
-            ProductVariant.objects.filter(product_id=product.pk).order_by("id")
-        )
-
-        prices_by_variant = {}
-        inventory_by_variant = {}
-
-        for variant in variants:
-            prices_by_variant[variant.pk] = [
-                {
-                    "id": price.pk,
-                    "tier": price.tier,
-                    "amount": f"{price.amount:.2f}",
-                }
-                for price in PriceRule.objects.filter(variant_id=variant.pk).order_by(
-                    "id"
-                )
-            ]
-
-            inventory = Inventory.objects.filter(variant_id=variant.pk).first()
-
-            inventory_by_variant[variant.pk] = (
-                {
-                    "id": inventory.pk,
-                    "quantity": inventory.quantity,
-                    "reserved": inventory.reserved,
-                }
-                if inventory
-                else None
-            )
-
-        availability = list(
-            Availability.objects.filter(product_id=product.pk)
-            .order_by("id")
-            .values(
-                "id",
-                "channel",
-                "enabled",
-            )
-        )
-
-        return Response(
-            {
-                "id": product.pk,
-                "name": product.name,
-                "sku": product.sku,
-                "description": product.description,
-                "status": product.status,
-                "category": {
-                    "id": product.category_id,
-                    "name": product.category.name,
-                },
-                "variants": [
-                    {
-                        "id": variant.pk,
-                        "name": variant.name,
-                        "sku": variant.sku,
-                        "prices": prices_by_variant[variant.pk],
-                        "inventory": inventory_by_variant.get(variant.pk),
-                    }
-                    for variant in variants
-                ],
-                "availability": availability,
-            }
-        )
+        return Response(ProductEditorSerializer(product).data)
 
 
 class ProductDetailView(generics.RetrieveUpdateAPIView):

@@ -1,7 +1,9 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.db import connection
 from django.test import TestCase
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 
 from catalog.models import (
@@ -150,3 +152,51 @@ class ProductEditorAPITests(TestCase):
             self.editor_url(self.product),
         )
         self.assertEqual(response.status_code, 400)
+
+    def add_variants(self, count):
+        for number in range(count):
+            variant = ProductVariant.objects.create(
+                product=self.product,
+                name=f"Extra {number}",
+                sku=f"WORK-001-X{number}",
+            )
+            PriceRule.objects.create(
+                variant=variant,
+                tier="retail",
+                amount=Decimal("10.00"),
+            )
+            Inventory.objects.create(variant=variant, quantity=5, reserved=1)
+
+    def test_query_count_does_not_grow_with_variants(self):
+        params = {"merchant_id": self.merchant.pk}
+
+        with CaptureQueriesContext(connection) as one_variant:
+            self.client.get(self.editor_url(self.product), params)
+
+        self.add_variants(10)
+
+        with CaptureQueriesContext(connection) as many_variants:
+            response = self.client.get(self.editor_url(self.product), params)
+
+        self.assertEqual(len(response.data["variants"]), 11)
+        self.assertEqual(len(many_variants), len(one_variant))
+
+    def test_variant_without_inventory_returns_null(self):
+        ProductVariant.objects.create(
+            product=self.product,
+            name="No stock record",
+            sku="WORK-001-NONE",
+        )
+
+        response = self.client.get(
+            self.editor_url(self.product),
+            {"merchant_id": self.merchant.pk},
+        )
+
+        self.assertEqual(response.status_code, 200)
+
+        variant = response.data["variants"][-1]
+
+        self.assertEqual(variant["sku"], "WORK-001-NONE")
+        self.assertIsNone(variant["inventory"])
+        self.assertEqual(variant["prices"], [])
