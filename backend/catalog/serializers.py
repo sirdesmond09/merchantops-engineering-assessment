@@ -122,10 +122,14 @@ class ProductUpdateSerializer(serializers.ModelSerializer):
     def validate_sku(self, value):
         product = self.instance
 
-        duplicate = Product.objects.filter(
-            merchant_id=product.merchant_id,
-            sku=value,
-        ).exclude(pk=product.pk).exists()
+        duplicate = (
+            Product.objects.filter(
+                merchant_id=product.merchant_id,
+                sku=value,
+            )
+            .exclude(pk=product.pk)
+            .exists()
+        )
 
         if duplicate:
             raise serializers.ValidationError(

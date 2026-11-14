@@ -82,10 +82,9 @@ class ProductDetailView(MerchantScopedMixin, generics.RetrieveUpdateAPIView):
     ]
 
     def get_queryset(self):
-        return (
-            Product.objects.filter(merchant_id=self.get_merchant_id())
-            .select_related("category")
-        )
+        return Product.objects.filter(
+            merchant_id=self.get_merchant_id()
+        ).select_related("category")
 
     def perform_update(self, serializer):
         tracked_fields = (
