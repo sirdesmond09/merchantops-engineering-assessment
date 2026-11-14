@@ -1,8 +1,7 @@
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
-from rest_framework import generics, permissions
-from rest_framework.exceptions import ValidationError
+from rest_framework import generics
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -10,7 +9,6 @@ from rest_framework.views import APIView
 from catalog.models import (
     AuditLog,
     Availability,
-    Merchant,
     PriceRule,
     Product,
     ProductVariant,
@@ -21,38 +19,20 @@ from catalog.serializers import (
     ProductListSerializer,
     ProductUpdateSerializer,
 )
+from utils.mixin import MerchantScopedMixin
 
 
 class ProductPagination(PageNumberPagination):
     page_size = 25
 
 
-class ProductListView(generics.ListAPIView):
+class ProductListView(MerchantScopedMixin, generics.ListAPIView):
     serializer_class = ProductListSerializer
-    permission_classes = [permissions.IsAuthenticated]
     pagination_class = ProductPagination
 
     def get_queryset(self):
-        merchant_id = self.request.query_params.get("merchant_id")
-
-        if not merchant_id:
-            raise ValidationError({"merchant_id": "This parameter is required."})
-
-        try:
-            merchant_id = int(merchant_id)
-        except (TypeError, ValueError):
-            raise ValidationError({"merchant_id": "Must be a valid integer."})
-
-        if merchant_id <= 0:
-            raise ValidationError({"merchant_id": "Must be a positive integer."})
-
-        get_object_or_404(
-            Merchant.objects.filter(members=self.request.user),
-            pk=merchant_id,
-        )
-
         queryset = (
-            Product.objects.filter(merchant_id=merchant_id)
+            Product.objects.filter(merchant_id=self.get_merchant_id())
             .select_related("category")
             .order_by("id")
         )
@@ -67,28 +47,9 @@ class ProductListView(generics.ListAPIView):
         return queryset
 
 
-class ProductEditorView(APIView):
-    permission_classes = [permissions.IsAuthenticated]
+class ProductEditorView(MerchantScopedMixin, APIView):
 
     def get(self, request, pk):
-        merchant_id = request.query_params.get("merchant_id")
-
-        if not merchant_id:
-            raise ValidationError({"merchant_id": "This parameter is required."})
-
-        try:
-            merchant_id = int(merchant_id)
-        except (TypeError, ValueError):
-            raise ValidationError({"merchant_id": "Must be a valid integer."})
-
-        if merchant_id <= 0:
-            raise ValidationError({"merchant_id": "Must be a positive integer."})
-
-        get_object_or_404(
-            Merchant.objects.filter(members=request.user),
-            pk=merchant_id,
-        )
-
         # Load everything the editor shows in a fixed number of queries,
         # however many variants the product has.
         variants = (
@@ -105,15 +66,14 @@ class ProductEditorView(APIView):
                 Prefetch("availability", queryset=Availability.objects.order_by("id")),
             ),
             pk=pk,
-            merchant_id=merchant_id,
+            merchant_id=self.get_merchant_id(),
         )
 
         return Response(ProductEditorSerializer(product).data)
 
 
-class ProductDetailView(generics.RetrieveUpdateAPIView):
+class ProductDetailView(MerchantScopedMixin, generics.RetrieveUpdateAPIView):
     serializer_class = ProductUpdateSerializer
-    permission_classes = [permissions.IsAuthenticated]
     http_method_names = [
         "get",
         "patch",
@@ -122,26 +82,9 @@ class ProductDetailView(generics.RetrieveUpdateAPIView):
     ]
 
     def get_queryset(self):
-        merchant_id = self.request.query_params.get("merchant_id")
-
-        if not merchant_id:
-            raise ValidationError({"merchant_id": "This parameter is required."})
-
-        try:
-            merchant_id = int(merchant_id)
-        except (TypeError, ValueError):
-            raise ValidationError({"merchant_id": "Must be a valid integer."})
-
-        if merchant_id <= 0:
-            raise ValidationError({"merchant_id": "Must be a positive integer."})
-
-        get_object_or_404(
-            Merchant.objects.filter(members=self.request.user),
-            pk=merchant_id,
-        )
-
-        return Product.objects.filter(merchant_id=merchant_id).select_related(
-            "category"
+        return (
+            Product.objects.filter(merchant_id=self.get_merchant_id())
+            .select_related("category")
         )
 
     def perform_update(self, serializer):
@@ -187,32 +130,13 @@ class ProductDetailView(generics.RetrieveUpdateAPIView):
                 )
 
 
-class ProductActivityView(generics.ListAPIView):
+class ProductActivityView(MerchantScopedMixin, generics.ListAPIView):
     serializer_class = ProductActivitySerializer
-    permission_classes = [permissions.IsAuthenticated]
     pagination_class = ProductPagination
 
     def get_queryset(self):
-        merchant_id = self.request.query_params.get("merchant_id")
-
-        if not merchant_id:
-            raise ValidationError({"merchant_id": "This parameter is required."})
-
-        try:
-            merchant_id = int(merchant_id)
-        except (TypeError, ValueError):
-            raise ValidationError({"merchant_id": "Must be a valid integer."})
-
-        if merchant_id <= 0:
-            raise ValidationError({"merchant_id": "Must be a positive integer."})
-
-        get_object_or_404(
-            Merchant.objects.filter(members=self.request.user),
-            pk=merchant_id,
-        )
-
         product = get_object_or_404(
-            Product.objects.filter(merchant_id=merchant_id),
+            Product.objects.filter(merchant_id=self.get_merchant_id()),
             pk=self.kwargs["pk"],
         )
 
