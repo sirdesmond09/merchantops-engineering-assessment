@@ -163,3 +163,85 @@ class AuditLog(models.Model):
 
     class Meta:
         ordering = ["-created_at"]
+
+
+class AdjustmentType(models.TextChoices):
+    INCREASE = "increase", "Increase"
+    DECREASE = "decrease", "Decrease"
+
+
+class AdjustmentReason(models.TextChoices):
+    PHYSICAL_COUNT = "physical_count", "Physical count"
+    RETURNED_TO_STOCK = "returned_to_stock", "Returned to stock"
+    FOUND_STOCK = "found_stock", "Found stock"
+    DAMAGED = "damaged", "Damaged"
+    LOST_OR_STOLEN = "lost_or_stolen", "Lost or stolen"
+    EXPIRED = "expired", "Expired"
+    OTHER = "other", "Other"
+
+
+# The reasons an operator may give for each adjustment type.
+ADJUSTMENT_REASONS = {
+    AdjustmentType.INCREASE: (
+        AdjustmentReason.PHYSICAL_COUNT,
+        AdjustmentReason.RETURNED_TO_STOCK,
+        AdjustmentReason.FOUND_STOCK,
+        AdjustmentReason.OTHER,
+    ),
+    AdjustmentType.DECREASE: (
+        AdjustmentReason.PHYSICAL_COUNT,
+        AdjustmentReason.DAMAGED,
+        AdjustmentReason.LOST_OR_STOLEN,
+        AdjustmentReason.EXPIRED,
+        AdjustmentReason.OTHER,
+    ),
+}
+
+
+class InventoryAdjustment(models.Model):
+    """A manual stock correction. Rows are written once and never changed."""
+
+    variant = models.ForeignKey(
+        ProductVariant,
+        on_delete=models.PROTECT,
+        related_name="inventory_adjustments",
+    )
+    actor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name="inventory_adjustments",
+    )
+    # Kept so the record still names the operator if the account is deleted.
+    actor_username = models.CharField(max_length=150)
+    type = models.CharField(max_length=16, choices=AdjustmentType.choices)
+    quantity = models.PositiveIntegerField()
+    reason = models.CharField(max_length=32, choices=AdjustmentReason.choices)
+    note = models.CharField(max_length=255, blank=True)
+    quantity_before = models.PositiveIntegerField()
+    quantity_after = models.PositiveIntegerField()
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(quantity__gte=1),
+                name="inventory_adjustment_quantity_positive",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(
+                        type=AdjustmentType.INCREASE,
+                        quantity_after=models.F("quantity_before")
+                        + models.F("quantity"),
+                    )
+                    | models.Q(
+                        type=AdjustmentType.DECREASE,
+                        quantity_before=models.F("quantity_after")
+                        + models.F("quantity"),
+                    )
+                ),
+                name="inventory_adjustment_quantities_match_type",
+            ),
+        ]
