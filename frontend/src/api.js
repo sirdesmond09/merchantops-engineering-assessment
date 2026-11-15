@@ -33,9 +33,9 @@ function errorMessage(data, fallback) {
   }).join(' ') || fallback
 }
 
-async function request(path, { params, signal, body, method } = {}) {
+async function request(path, { params, signal, body, method, headers: extraHeaders } = {}) {
   const query = new URLSearchParams({ merchant_id: merchant.id, ...params })
-  const headers = { Accept: 'application/json' }
+  const headers = { Accept: 'application/json', ...extraHeaders }
   if (body) {
     headers['Content-Type'] = 'application/json'
     headers['X-CSRFToken'] = csrfToken()
@@ -77,9 +77,20 @@ export const products = {
   activity(id, page, signal) {
     return request(id + '/activity/', { params: { page }, signal })
   },
-  adjustInventory(id, variantId, body) {
-    return request(id + '/variants/' + variantId + '/adjustments/', { body, method: 'POST' })
+  adjustInventory(id, variantId, body, idempotencyKey) {
+    return request(id + '/variants/' + variantId + '/adjustments/', {
+      body,
+      method: 'POST',
+      headers: { 'Idempotency-Key': idempotencyKey },
+    })
   },
+}
+
+// Identifies one intended adjustment: the time in milliseconds plus 16 random
+// hex characters. Sending it again lets the server recognise a repeat.
+export function newIdempotencyKey() {
+  const random = crypto.getRandomValues(new Uint8Array(8))
+  return Date.now() + '-' + Array.from(random, (byte) => byte.toString(16).padStart(2, '0')).join('')
 }
 
 // Mirrors ADJUSTMENT_REASONS in backend/catalog/models.py. The server validates the choice.

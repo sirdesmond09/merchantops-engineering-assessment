@@ -1,6 +1,6 @@
 <script setup>
 import { computed, onMounted, ref, watch } from 'vue'
-import { adjustmentReasons, products } from '../api'
+import { adjustmentReasons, newIdempotencyKey, products } from '../api'
 import SelectMenu from './SelectMenu.vue'
 
 const props = defineProps({
@@ -18,6 +18,9 @@ const note = ref('')
 const saving = ref(false)
 const error = ref('')
 const reasonMenuOpen = ref(false)
+// One key for this popup. Saving again after a lost reply repeats the same
+// request, so the server applies it once.
+const idempotencyKey = newIdempotencyKey()
 
 const reasons = computed(() => adjustmentReasons[type.value])
 const amount = computed(() => Number(quantity.value))
@@ -63,7 +66,7 @@ async function save() {
       quantity: amount.value,
       reason: reason.value,
       note: note.value.trim(),
-    })
+    }, idempotencyKey)
     emit('saved', result)
     dialog.value.close()
   } catch (failure) {
