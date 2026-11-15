@@ -1,3 +1,4 @@
+import itertools
 import json
 from unittest import mock
 
@@ -16,6 +17,13 @@ from catalog.models import (
     ProductVariant,
 )
 from catalog.services import adjust_inventory
+
+key_numbers = itertools.count(1)
+
+
+def new_key():
+    """A fresh key in the format the frontend sends."""
+    return f"1794700000000-{next(key_numbers):016x}"
 
 
 class InventoryAdjustmentTestData(TestCase):
@@ -88,7 +96,15 @@ class InventoryAdjustmentTestData(TestCase):
     def setUp(self):
         self.client.force_login(self.user)
 
-    def adjust(self, body, product=None, variant=None, merchant=None, client=None):
+    def adjust(
+        self,
+        body,
+        product=None,
+        variant=None,
+        merchant=None,
+        client=None,
+        key=None,
+    ):
         product = product or self.product
         variant = variant or self.variant
         merchant = merchant or self.merchant
@@ -101,6 +117,7 @@ class InventoryAdjustmentTestData(TestCase):
             f"{url}?merchant_id={merchant.pk}",
             data=json.dumps(body),
             content_type="application/json",
+            headers={"Idempotency-Key": key or new_key()},
         )
 
     def stock(self, variant=None):
@@ -370,6 +387,7 @@ class InventoryAdjustmentAuthorizationTests(InventoryAdjustmentTestData):
             url,
             data=json.dumps(self.body),
             content_type="application/json",
+            headers={"Idempotency-Key": new_key()},
         )
 
         self.assertEqual(response.status_code, 400)
@@ -403,6 +421,111 @@ class InventoryAdjustmentAuthorizationTests(InventoryAdjustmentTestData):
         self.assertEqual(response.status_code, 405)
 
 
+class InventoryAdjustmentRepeatedRequestTests(InventoryAdjustmentTestData):
+    body = {"type": "decrease", "quantity": 5, "reason": "damaged"}
+
+    def test_repeated_request_is_applied_once(self):
+        key = new_key()
+
+        first = self.adjust(self.body, key=key)
+        second = self.adjust(self.body, key=key)
+
+        self.assertEqual(first.status_code, 201)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.data["id"], first.data["id"])
+        self.assertEqual(second.data["quantity_before"], 20)
+        self.assertEqual(second.data["quantity_after"], 15)
+        self.assertEqual(second.data["inventory"]["quantity"], 15)
+
+        self.assertEqual(self.stock(), 15)
+        self.assertEqual(InventoryAdjustment.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.count(), 1)
+
+    def test_new_key_makes_a_new_adjustment(self):
+        self.adjust(self.body)
+        self.adjust(self.body)
+
+        self.assertEqual(self.stock(), 10)
+        self.assertEqual(InventoryAdjustment.objects.count(), 2)
+
+    def assert_conflict(self, response):
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.stock(), 15)
+        self.assertEqual(InventoryAdjustment.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.count(), 1)
+
+    def test_key_cannot_be_reused_with_different_values(self):
+        key = new_key()
+        self.adjust(self.body, key=key)
+
+        for body in (
+            {"type": "decrease", "quantity": 6, "reason": "damaged"},
+            {"type": "decrease", "quantity": 5, "reason": "expired"},
+            {"type": "increase", "quantity": 5, "reason": "found_stock"},
+            {"type": "decrease", "quantity": 5, "reason": "damaged", "note": "x"},
+        ):
+            with self.subTest(body=body):
+                self.assert_conflict(self.adjust(body, key=key))
+
+    def test_key_cannot_be_reused_for_another_variant(self):
+        second_variant = self.create_variant(
+            self.second_product, quantity=20, reserved=3
+        )
+        key = new_key()
+        self.adjust(self.body, key=key)
+
+        response = self.adjust(
+            self.body,
+            product=self.second_product,
+            variant=second_variant,
+            key=key,
+        )
+
+        self.assert_conflict(response)
+        self.assertEqual(self.stock(second_variant), 20)
+
+    def test_key_cannot_be_reused_by_another_operator(self):
+        colleague = get_user_model().objects.create_user(
+            username="second-operator",
+            password="test-password",
+        )
+        self.merchant.members.add(colleague)
+        key = new_key()
+        self.adjust(self.body, key=key)
+
+        client = Client()
+        client.force_login(colleague)
+        response = self.adjust(self.body, client=client, key=key)
+
+        self.assert_conflict(response)
+        self.assertNotIn("id", response.data)
+
+    def test_key_is_required_and_must_be_well_formed(self):
+        url = reverse(
+            "inventory-adjustment",
+            kwargs={"pk": self.product.pk, "variant_pk": self.variant.pk},
+        )
+
+        for headers in (
+            {},
+            {"Idempotency-Key": ""},
+            {"Idempotency-Key": "not-a-key"},
+            {"Idempotency-Key": "1794700000000"},
+            {"Idempotency-Key": "1794700000000-XYZ"},
+        ):
+            with self.subTest(headers=headers):
+                response = self.client.post(
+                    f"{url}?merchant_id={self.merchant.pk}",
+                    data=json.dumps(self.body),
+                    content_type="application/json",
+                    headers=headers,
+                )
+
+                self.assertEqual(response.status_code, 400)
+                self.assertIn("idempotency_key", response.data)
+                self.assert_nothing_changed()
+
+
 class InventoryAdjustmentAtomicityTests(InventoryAdjustmentTestData):
     def adjust_with_failure(self, target):
         with mock.patch(target, side_effect=RuntimeError("Simulated failure")):
@@ -413,6 +536,7 @@ class InventoryAdjustmentAtomicityTests(InventoryAdjustmentTestData):
                     adjustment_type="decrease",
                     quantity=5,
                     reason="damaged",
+                    idempotency_key=new_key(),
                 )
 
     def test_stock_is_unchanged_when_the_adjustment_record_fails(self):

@@ -64,10 +64,12 @@ class InventoryAdjustmentConcurrencyTests(TransactionTestCase):
             reserved=reserved,
         )
 
-    def adjust_together(self, bodies):
+    def adjust_together(self, bodies, keys=None):
         """Post every body at the same time and return the status codes."""
         start = threading.Barrier(len(bodies))
         statuses = [None] * len(bodies)
+        # Every request gets its own key unless the test supplies them.
+        keys = keys or [f"1794700000000-{index:016x}" for index in range(len(bodies))]
 
         def worker(index, body):
             try:
@@ -79,6 +81,7 @@ class InventoryAdjustmentConcurrencyTests(TransactionTestCase):
                     self.url,
                     data=json.dumps(body),
                     content_type="application/json",
+                    headers={"Idempotency-Key": keys[index]},
                 )
                 statuses[index] = response.status_code
             finally:
@@ -137,3 +140,17 @@ class InventoryAdjustmentConcurrencyTests(TransactionTestCase):
         self.assertEqual(InventoryAdjustment.objects.count(), 3)
         self.assertEqual(AuditLog.objects.count(), 3)
         self.assert_history_is_unbroken(starting_quantity=10)
+
+    def test_simultaneous_copies_of_one_request_are_applied_once(self):
+        self.set_stock(quantity=100, reserved=0)
+
+        statuses = self.adjust_together(
+            [{"type": "decrease", "quantity": 2, "reason": "damaged"}] * 5,
+            keys=["1794700000000-00000000000000aa"] * 5,
+        )
+
+        # One request makes the adjustment and the other four get it back.
+        self.assertEqual(sorted(statuses), [200, 200, 200, 200, 201])
+        self.assertEqual(Inventory.objects.get(variant=self.variant).quantity, 98)
+        self.assertEqual(InventoryAdjustment.objects.count(), 1)
+        self.assertEqual(AuditLog.objects.count(), 1)

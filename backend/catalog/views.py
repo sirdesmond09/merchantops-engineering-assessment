@@ -1,7 +1,10 @@
+import re
+
 from django.db import transaction
 from django.db.models import Prefetch, Q
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
+from rest_framework.exceptions import ValidationError
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -150,6 +153,10 @@ class ProductActivityView(MerchantScopedMixin, generics.ListAPIView):
         )
 
 
+# A millisecond timestamp, a dash, and 16 random hex characters.
+IDEMPOTENCY_KEY_FORMAT = re.compile(r"\d{13}-[0-9a-f]{16}")
+
+
 class InventoryAdjustmentView(MerchantScopedMixin, APIView):
     def post(self, request, pk, variant_pk):
         # The variant must belong to this product and this merchant.
@@ -160,17 +167,25 @@ class InventoryAdjustmentView(MerchantScopedMixin, APIView):
             product__merchant_id=self.get_merchant_id(),
         )
 
+        idempotency_key = request.headers.get("Idempotency-Key", "")
+
+        if not IDEMPOTENCY_KEY_FORMAT.fullmatch(idempotency_key):
+            raise ValidationError(
+                {"idempotency_key": "Send a valid Idempotency-Key header."}
+            )
+
         serializer = InventoryAdjustmentInputSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
         data = serializer.validated_data
 
-        adjustment, inventory = adjust_inventory(
+        adjustment, inventory, created = adjust_inventory(
             variant=variant,
             actor=request.user,
             adjustment_type=data["type"],
             quantity=data["quantity"],
             reason=data["reason"],
             note=data["note"],
+            idempotency_key=idempotency_key,
         )
 
         return Response(
@@ -178,5 +193,6 @@ class InventoryAdjustmentView(MerchantScopedMixin, APIView):
                 **InventoryAdjustmentSerializer(adjustment).data,
                 "inventory": InventorySerializer(inventory).data,
             },
-            status=status.HTTP_201_CREATED,
+            # A repeat of an earlier request returns that result with 200.
+            status=status.HTTP_201_CREATED if created else status.HTTP_200_OK,
         )

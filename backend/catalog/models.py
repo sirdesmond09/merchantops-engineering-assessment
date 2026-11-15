@@ -221,6 +221,14 @@ class InventoryAdjustment(models.Model):
     note = models.CharField(max_length=255, blank=True)
     quantity_before = models.PositiveIntegerField()
     quantity_after = models.PositiveIntegerField()
+    # Sent by the client. A repeat of the same request carries the same key,
+    # so it is recognised and not applied twice.
+    idempotency_key = models.CharField(
+        max_length=40,
+        unique=True,
+        null=True,
+        blank=True,
+    )
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
