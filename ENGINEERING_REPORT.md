@@ -2,9 +2,9 @@
 
 ## 1. Findings and priorities
 
-I reviewed the backend and the Vue frontend, then measured the three screens an operator uses which are the product list page, the product page and the product activity page. For each one I checked the HTTP requests the browser makes and the SQL queries the server runs, checked the apis that were called and how it was implemented then finally confirmed the request counts in the browser's Network tab.
+I reviewed the backend and the Vue frontend, then measured the three screens an operator uses which are the product list page, the product page and the product activity page. For each one I checked the HTTP requests the browser makes and the SQL queries the server runs, checked the APIs that were called and how it was implemented then finally confirmed the request counts in the browser's Network tab.
 
-I noticed that the database is not slow the major challenge was that the application was doing far more work than a screen needs i.e too many HTTP requests from the browser and too many SQL queries per request. Here is a list of the findings:
+The database itself was not slow. The problem was that the application did far more work than each screen needs, that is, too many HTTP requests from the browser and too many SQL queries per request. Here is a list of the findings:
 
 | # | Issue | Where | Effect on the original code | Outcome |
 | --- | --- | --- | --- | --- |
@@ -21,13 +21,13 @@ I noticed that the database is not slow the major challenge was that the applica
 
 ### How I measured
 
-I created a management command to run the tests and return the performance results based on what I wanted to measure.
+I wrote a read-only management command that replays the API calls each screen makes and counts requests, queries, time and response size.
 
 ```bash
 docker compose exec backend python manage.py measure_performance
 ```
 
-It signs in as `demo_operator` and replays the API calls each screen makes, using the data seeded by `./setup.sh` (2,500 products for the merchant measured).
+It signs in as `demo_operator` and uses the data seeded by `./setup.sh` (2,500 products for the merchant measured).
 
 | Column | Meaning |
 | --- | --- |
