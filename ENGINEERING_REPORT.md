@@ -173,3 +173,9 @@ To confirm the tests detect the problem, I ran the first two once with the row l
 - **The activity page still makes 2 requests.** Removing the second one means changing the shape of the paginated activity response to save about 2 ms.
 - **The last list page got slightly heavier in the database** (4.9 ms to 5.5 ms) because the list query now joins the category while sorting. The call is still faster overall (10.9 ms to 8.1 ms).
 - **Times exclude the network.** Everything ran on one machine. A real operator pays a network delay on every request, so removing 25 requests from the list page saves more in production than these times show.
+- **A reopened popup counts as a new request.** The idempotency key belongs to one open popup. If an operator closes the popup after a save that appeared to fail and opens it again, the next save has a new key and is applied as a new adjustment. The table not updating is their cue to check the stock first.
+- **A variant with adjustments cannot be deleted.** The record protects its variant. The application has no way to delete a variant today.
+- **A variant with no stock record cannot be adjusted.** The request is rejected with a clear message instead of creating the record.
+- **The reason list is fixed in code** and repeated in the frontend for the dropdown. If the two drift apart, the server rejects the request.
+- **Concurrent adjustments to one variant run one at a time.** That is the point of the lock. Adjustments to different variants do not wait for each other.
+- **Next, if catalogues grow much larger:** cursor based paging so deep pages do not sort and skip thousands of rows, and a decision with the product owner on whether search can become word based.
