@@ -3,14 +3,19 @@ import re
 from rest_framework import serializers
 
 from catalog.models import (
+    ADJUSTMENT_REASONS,
+    AdjustmentReason,
+    AdjustmentType,
     AuditLog,
     Availability,
     Category,
     Inventory,
+    InventoryAdjustment,
     PriceRule,
     Product,
     ProductVariant,
 )
+from catalog.services import MAX_QUANTITY
 
 
 class ProductListSerializer(serializers.ModelSerializer):
@@ -172,5 +177,49 @@ class ProductActivitySerializer(serializers.ModelSerializer):
             "actor",
             "action",
             "details",
+            "created_at",
+        ]
+
+
+class InventoryAdjustmentInputSerializer(serializers.Serializer):
+    type = serializers.ChoiceField(choices=AdjustmentType.choices)
+    quantity = serializers.IntegerField(min_value=1, max_value=MAX_QUANTITY)
+    reason = serializers.ChoiceField(choices=AdjustmentReason.choices)
+    note = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
+    def validate(self, attrs):
+        if attrs["reason"] not in ADJUSTMENT_REASONS[attrs["type"]]:
+            raise serializers.ValidationError(
+                {"reason": "This reason cannot be used with this adjustment type."}
+            )
+
+        if attrs["reason"] == AdjustmentReason.OTHER and not attrs["note"]:
+            raise serializers.ValidationError(
+                {"note": "Add a note to explain the reason."}
+            )
+
+        return attrs
+
+
+class InventoryAdjustmentSerializer(serializers.ModelSerializer):
+    actor = serializers.CharField(source="actor_username")
+
+    class Meta:
+        model = InventoryAdjustment
+        fields = [
+            "id",
+            "variant",
+            "type",
+            "quantity",
+            "reason",
+            "note",
+            "quantity_before",
+            "quantity_after",
+            "actor",
             "created_at",
         ]
