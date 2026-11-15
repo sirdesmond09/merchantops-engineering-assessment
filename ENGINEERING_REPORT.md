@@ -4,7 +4,7 @@
 
 I read the backend and the Vue frontend, then measured the three screens an operator uses: the product list page, the product page and the product activity page. For each one I checked the HTTP requests the browser makes and the SQL queries the server runs, and confirmed the request counts in the browser's Network tab.
 
-**Main finding:** the database is not slow. The application did far more work than a screen needs: too many HTTP requests from the browser and too many SQL queries per request. Here is a list of the findings:
+the database is not slow. The application did far more work than a screen needs: too many HTTP requests from the browser and too many SQL queries per request. Here is a list of the findings:
 
 | # | Issue | Where | Effect on the original code | Outcome |
 | --- | --- | --- | --- | --- |
@@ -91,6 +91,8 @@ Requests, queries and bytes are exact and identical on every run. Times are the 
 
 ## 3. Implementation
 
+### Performance
+
 | # | What I changed | Why | Test |
 | --- | --- | --- | --- |
 | 1 | `CatalogueView.vue` uses the list response directly. The loop that refetched each product is removed. | The list already returns every field the table shows. | Checked in the browser: 1 API request per page load. |
@@ -101,9 +103,65 @@ Requests, queries and bytes are exact and identical on every run. Times are the 
 
 **Issue 6, not changed.** I added an index on `(merchant, id)` so the last list page could skip sorting 2,500 rows. MySQL did not use it, and the measured time did not change (5.8 ms before, 5.5 ms after), so I removed it. Search matches text anywhere in the name or SKU, which no ordinary index can serve. A full-text index would make search match whole words only, so a search for `000123` would stop finding `ASSESS-000123`. That is a behaviour change for a saving of about 3 ms.
 
+### Inventory adjustments
+
+An operator opens a product, goes to the Inventory tab and clicks Adjust on a variant. A popup asks for the type (Increase or Decrease), a whole quantity of 1 or more, a reason from a list, and a note, which is required only for the reason "Other".
+
+`POST /api/products/<id>/variants/<variant_id>/adjustments/?merchant_id=<id>` with `{"type": "decrease", "quantity": 5, "reason": "damaged", "note": ""}`.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Record | `InventoryAdjustment` in `backend/catalog/models.py`, migration `0004` | One row per adjustment: variant, operator, operator's username, type, quantity, reason, note, quantity before, quantity after and time. |
+| Rules | `adjust_inventory()` in `backend/catalog/services.py` | Locks the stock row, checks the rules, updates the quantity, writes the record and an activity entry, all in one transaction. |
+| API | `InventoryAdjustmentView` in `backend/catalog/views.py` | Checks the merchant, validates the input, calls the service. |
+| Screen | `InventoryAdjustmentDialog.vue`, `SelectMenu.vue`, `EditorView.vue` | The popup, its reason dropdown, the Adjust button on each row, and the confirmation or error message. |
+
+Decisions:
+
+- **Type and positive quantity instead of a signed number.** An operator cannot enter a decrease as an increase by forgetting a minus sign, and the quantity has no zero or negative edge cases.
+- **Reasons from a fixed list.** Fixed reasons can be counted and filtered later, for example how much stock was written off as damaged. Free text cannot.
+- **A row lock (**`select_for_update`**) inside one transaction.** The record needs the true quantity before and after, so the read and the write must be one protected unit. A second adjustment to the same variant waits for the first to commit and then reads the new quantity. This is the pattern the existing product update already uses.
+- **A dedicated table for the record.** Typed columns and database checks keep the history accurate. The existing activity log also gets an entry, so the Activity page shows the adjustment next to product edits.
+- **The operator's username is stored on the record.** The link to the user account is cleared if the account is deleted, so the record keeps the name to stay identifiable.
+
 ## 4. Correctness
 
+82 automated tests pass: the 46 original tests, 4 for the performance fixes and 32 for inventory adjustments.
 
+```bash
+docker compose exec backend python manage.py test catalog --keepdb
+```
+
+| Guarantee | How it is enforced | How it is verified |
+| --- | --- | --- |
+| 1. Nonzero whole amount and a required reason | The input serializer accepts only a whole quantity of 1 or more, a known type and a reason that belongs to that type. A database check rejects a quantity below 1. | Tests reject 0, negatives, 1.5, text, an empty value, a missing or unknown type, a missing or unknown reason, a reason from the wrong type, and "Other" without a note. |
+| 2. Never below reserved | The service compares the new quantity with the reserved quantity while holding the lock. The existing database check on the stock table is the last line of defence. | A decrease one unit too large is rejected and changes nothing. A decrease exactly down to the reserved quantity succeeds. |
+| 3. Correct under concurrency | The stock row is locked for the length of the transaction. | See the concurrency tests below. |
+| 4. Accurate audit record | Each success writes one `InventoryAdjustment` row with the operator, variant, type, quantity, reason, before, after and time. A database check requires before, after and quantity to agree with the type. | Tests compare every field of the record and of the activity entry, and check that the record keeps the operator's name after the account is deleted. |
+| 5. Stock and audit saved together or not at all | One database transaction wraps the stock update and both records. | Two tests force a failure, one at each record. In both, the stock is unchanged and no record exists. |
+| 6. No access to other merchants | The shared merchant check runs first, then the variant is looked up through its product and merchant. Anything else is "not found". | Tests cover another merchant's variant, that variant reached through the operator's own product, a merchant the operator does not belong to, a variant under the wrong product, a missing merchant, a signed-out user and a missing CSRF token. Nothing changes in any of them. |
+| 7. Usable from the product page with clear feedback | The popup on the Inventory tab shows the new quantity before saving, and the server's message when a request is rejected. | Manual steps below. The frontend production build passes. |
+| 8. Existing behaviour keeps working | No existing endpoint or response changed in Task 2. | The 46 original tests pass unchanged, and `measure_performance` shows the same request and query counts as before. |
+
+### Concurrency tests
+
+`backend/catalog/tests/test_inventory_concurrency.py` sends requests for one variant from separate threads, each with its own database connection, all released at the same moment. It uses `TransactionTestCase`, so every request commits for real.
+
+| Test | Setup | Expected result |
+| --- | --- | --- |
+| Simultaneous adjustments are all applied | 100 in stock. 8 increases of 3 and 4 decreases of 2 at once. | All 12 succeed, stock is 116, there are 12 records, and each record starts from the quantity the previous one ended on. |
+| Competing decreases never go below reserved | 10 in stock, 4 reserved. 5 decreases of 2 at once. | Exactly 3 succeed and 2 are rejected. Stock is 4. |
+
+To confirm the tests detect the problem, I ran them once with the row lock removed. Both failed: the first ended with 103 in stock instead of 116, and the second let all 5 decreases through. With the lock restored they pass on every run.
+
+### Manual steps
+
+1. Open a product, go to the Inventory tab and click Adjust on a variant. A popup opens.
+2. Choose Increase, enter 5, pick "Found stock" and save. The popup closes, the quantity goes up by 5 and a confirmation line appears.
+3. Open Adjust again and try a quantity of 0, no reason, and "Other" with no note. Each shows a clear message and saves nothing.
+4. Choose Decrease and enter more than the available quantity. The popup says stock cannot go below the reserved quantity.
+5. Press Escape or Cancel. The popup closes and nothing changes.
+6. Click View activity. The adjustment is listed with the operator, variant, type, reason and quantity change.
 
 ## 5. Trade-offs
 
@@ -112,4 +170,9 @@ Requests, queries and bytes are exact and identical on every run. Times are the 
 - **The activity page still makes 2 requests.** Removing the second one means changing the shape of the paginated activity response to save about 2 ms.
 - **The last list page got slightly heavier in the database** (4.9 ms to 5.5 ms) because the list query now joins the category while sorting. The call is still faster overall (10.9 ms to 8.1 ms).
 - **Times exclude the network.** Everything ran on one machine. A real operator pays a network delay on every request, so removing 25 requests from the list page saves more in production than these times show.
+- **A repeated request adjusts twice.** There is no idempotency key. The popup disables Save while a request is running, which covers double clicks but not a network retry.
+- **A variant with adjustments cannot be deleted.** The record protects its variant. The application has no way to delete a variant today.
+- **A variant with no stock record cannot be adjusted.** The request is rejected with a clear message instead of creating the record.
+- **The reason list is fixed in code** and repeated in the frontend for the dropdown. If the two drift apart, the server rejects the request.
+- **Concurrent adjustments to one variant run one at a time.** That is the point of the lock. Adjustments to different variants do not wait for each other.
 - **Next, if catalogues grow much larger:** cursor based paging so deep pages do not sort and skip thousands of rows, and a decision with the product owner on whether search can become word based.
