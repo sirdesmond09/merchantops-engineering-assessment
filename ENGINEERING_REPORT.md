@@ -2,9 +2,9 @@
 
 ## 1. Findings and priorities
 
-I read the backend and the Vue frontend, then measured the three screens an operator uses: the product list page, the product page and the product activity page. For each one I checked the HTTP requests the browser makes and the SQL queries the server runs, and confirmed the request counts in the browser's Network tab.
+I reviewed the backend and the Vue frontend, then measured the three screens an operator uses which are the product list page, the product page and the product activity page. For each one I checked the HTTP requests the browser makes and the SQL queries the server runs, checked the apis that were called and how it was implemented then finally confirmed the request counts in the browser's Network tab.
 
-the database is not slow. The application did far more work than a screen needs: too many HTTP requests from the browser and too many SQL queries per request. Here is a list of the findings:
+I noticed that the database is not slow the major challenge was that the application was doing far more work than a screen needs i.e too many HTTP requests from the browser and too many SQL queries per request. Here is a list of the findings:
 
 | # | Issue | Where | Effect on the original code | Outcome |
 | --- | --- | --- | --- | --- |
@@ -111,9 +111,9 @@ An operator opens a product, goes to the Inventory tab and clicks Adjust on a va
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Record | `InventoryAdjustment` in `backend/catalog/models.py`, migration `0004` | One row per adjustment: variant, operator, operator's username, type, quantity, reason, note, quantity before, quantity after and time. |
-| Rules | `adjust_inventory()` in `backend/catalog/services.py` | Locks the stock row, checks the rules, updates the quantity, writes the record and an activity entry, all in one transaction. |
-| API | `InventoryAdjustmentView` in `backend/catalog/views.py` | Checks the merchant, validates the input, calls the service. |
+| Record | `InventoryAdjustment` in `backend/catalog/models.py`, migrations `0004` and `0005` | One row per adjustment: variant, operator, operator's username, type, quantity, reason, note, quantity before, quantity after, time and the request's idempotency key. |
+| Rules | `adjust_inventory()` in `backend/catalog/services.py` | Locks the stock row, recognises a repeated request, checks the rules, updates the quantity, writes the record and an activity entry, all in one transaction. |
+| API | `InventoryAdjustmentView` in `backend/catalog/views.py` | Checks the merchant, the `Idempotency-Key` header and the input, then calls the service. |
 | Screen | `InventoryAdjustmentDialog.vue`, `SelectMenu.vue`, `EditorView.vue` | The popup, its reason dropdown, the Adjust button on each row, and the confirmation or error message. |
 
 Decisions:
@@ -122,11 +122,12 @@ Decisions:
 - **Reasons from a fixed list.** Fixed reasons can be counted and filtered later, for example how much stock was written off as damaged. Free text cannot.
 - **A row lock (**`select_for_update`**) inside one transaction.** The record needs the true quantity before and after, so the read and the write must be one protected unit. A second adjustment to the same variant waits for the first to commit and then reads the new quantity. This is the pattern the existing product update already uses.
 - **A dedicated table for the record.** Typed columns and database checks keep the history accurate. The existing activity log also gets an entry, so the Activity page shows the adjustment next to product edits.
+- **An idempotency key on every request.** The popup creates one key when it opens (the time in milliseconds plus 16 random hex characters) and sends it in the `Idempotency-Key` header. The key is stored on the record with a unique constraint. If the same request arrives again, for example after a lost reply, the server returns the original result with `200` and changes nothing. The same key with different values, another variant or another operator gets `409`. 
 - **The operator's username is stored on the record.** The link to the user account is cleared if the account is deleted, so the record keeps the name to stay identifiable.
 
 ## 4. Correctness
 
-82 automated tests pass: the 46 original tests, 4 for the performance fixes and 32 for inventory adjustments.
+89 automated tests pass: the 46 original tests, 4 for the performance fixes and 39 for inventory adjustments.
 
 ```bash
 docker compose exec backend python manage.py test catalog --keepdb
@@ -141,6 +142,7 @@ docker compose exec backend python manage.py test catalog --keepdb
 | 5. Stock and audit saved together or not at all | One database transaction wraps the stock update and both records. | Two tests force a failure, one at each record. In both, the stock is unchanged and no record exists. |
 | 6. No access to other merchants | The shared merchant check runs first, then the variant is looked up through its product and merchant. Anything else is "not found". | Tests cover another merchant's variant, that variant reached through the operator's own product, a merchant the operator does not belong to, a variant under the wrong product, a missing merchant, a signed-out user and a missing CSRF token. Nothing changes in any of them. |
 | 7. Usable from the product page with clear feedback | The popup on the Inventory tab shows the new quantity before saving, and the server's message when a request is rejected. | Manual steps below. The frontend production build passes. |
+| Extra: a repeated request is applied once | The service looks for the request's idempotency key after taking the lock. A unique constraint on the key is the backstop. | Tests send the same request twice and get one record, one stock change and the original result back. Reusing a key with different values, for another variant or by another operator is rejected with nothing changed. A missing or malformed key is rejected. |
 | 8. Existing behaviour keeps working | No existing endpoint or response changed in Task 2. | The 46 original tests pass unchanged, and `measure_performance` shows the same request and query counts as before. |
 
 ### Concurrency tests
@@ -151,8 +153,9 @@ docker compose exec backend python manage.py test catalog --keepdb
 | --- | --- | --- |
 | Simultaneous adjustments are all applied | 100 in stock. 8 increases of 3 and 4 decreases of 2 at once. | All 12 succeed, stock is 116, there are 12 records, and each record starts from the quantity the previous one ended on. |
 | Competing decreases never go below reserved | 10 in stock, 4 reserved. 5 decreases of 2 at once. | Exactly 3 succeed and 2 are rejected. Stock is 4. |
+| Simultaneous copies of one request are applied once | 100 in stock. The same decrease of 2 sent 5 times at once with one key. | One request makes the adjustment and the other four get it back. Stock is 98 and there is 1 record. |
 
-To confirm the tests detect the problem, I ran them once with the row lock removed. Both failed: the first ended with 103 in stock instead of 116, and the second let all 5 decreases through. With the lock restored they pass on every run.
+To confirm the tests detect the problem, I ran the first two once with the row lock removed. Both failed: the first ended with 103 in stock instead of 116, and the second let all 5 decreases through. With the lock restored they pass on every run.
 
 ### Manual steps
 
@@ -170,9 +173,3 @@ To confirm the tests detect the problem, I ran them once with the row lock remov
 - **The activity page still makes 2 requests.** Removing the second one means changing the shape of the paginated activity response to save about 2 ms.
 - **The last list page got slightly heavier in the database** (4.9 ms to 5.5 ms) because the list query now joins the category while sorting. The call is still faster overall (10.9 ms to 8.1 ms).
 - **Times exclude the network.** Everything ran on one machine. A real operator pays a network delay on every request, so removing 25 requests from the list page saves more in production than these times show.
-- **A repeated request adjusts twice.** There is no idempotency key. The popup disables Save while a request is running, which covers double clicks but not a network retry.
-- **A variant with adjustments cannot be deleted.** The record protects its variant. The application has no way to delete a variant today.
-- **A variant with no stock record cannot be adjusted.** The request is rejected with a clear message instead of creating the record.
-- **The reason list is fixed in code** and repeated in the frontend for the dropdown. If the two drift apart, the server rejects the request.
-- **Concurrent adjustments to one variant run one at a time.** That is the point of the lock. Adjustments to different variants do not wait for each other.
-- **Next, if catalogues grow much larger:** cursor based paging so deep pages do not sort and skip thousands of rows, and a decision with the product owner on whether search can become word based.
