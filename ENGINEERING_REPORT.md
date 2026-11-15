@@ -89,6 +89,17 @@ Requests, queries and bytes are exact and identical on every run. Times are the 
 - **Product activity page:** not changed, and its numbers did not move (4.0 ms and 4.2 ms). The same is true of the basic fields call (1.8 ms and 2.0 ms). This shows the two runs are comparable and that a difference of a few tenths of a millisecond is noise.
 - **Responses:** the full product response grew by 42 bytes because it now includes `image_url`. Every other response is byte for byte identical before and after.
 
+### How to reproduce
+
+You can compare the results by running these commands to go back to the original code, measure performance and compare with the opimized version
+```bash
+./setup.sh
+git checkout 9ae5a6f   # original code plus the measurement command only
+docker compose exec backend python manage.py measure_performance
+git checkout main
+docker compose exec backend python manage.py measure_performance
+```
+
 ## 3. Implementation
 
 ### Performance
