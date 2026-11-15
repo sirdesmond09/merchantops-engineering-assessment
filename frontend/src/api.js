@@ -33,7 +33,7 @@ function errorMessage(data, fallback) {
   }).join(' ') || fallback
 }
 
-async function request(path, { params, signal, body } = {}) {
+async function request(path, { params, signal, body, method } = {}) {
   const query = new URLSearchParams({ merchant_id: merchant.id, ...params })
   const headers = { Accept: 'application/json' }
   if (body) {
@@ -41,7 +41,7 @@ async function request(path, { params, signal, body } = {}) {
     headers['X-CSRFToken'] = csrfToken()
   }
   const response = await fetch('/api/products/' + path + '?' + query, {
-    method: body ? 'PATCH' : 'GET',
+    method: method || (body ? 'PATCH' : 'GET'),
     credentials: 'same-origin',
     signal,
     headers,
@@ -77,4 +77,24 @@ export const products = {
   activity(id, page, signal) {
     return request(id + '/activity/', { params: { page }, signal })
   },
+  adjustInventory(id, variantId, body) {
+    return request(id + '/variants/' + variantId + '/adjustments/', { body, method: 'POST' })
+  },
+}
+
+// Mirrors ADJUSTMENT_REASONS in backend/catalog/models.py. The server validates the choice.
+export const adjustmentReasons = {
+  increase: [
+    { value: 'physical_count', label: 'Physical count' },
+    { value: 'returned_to_stock', label: 'Returned to stock' },
+    { value: 'found_stock', label: 'Found stock' },
+    { value: 'other', label: 'Other' },
+  ],
+  decrease: [
+    { value: 'physical_count', label: 'Physical count' },
+    { value: 'damaged', label: 'Damaged' },
+    { value: 'lost_or_stolen', label: 'Lost or stolen' },
+    { value: 'expired', label: 'Expired' },
+    { value: 'other', label: 'Other' },
+  ],
 }

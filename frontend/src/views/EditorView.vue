@@ -4,6 +4,7 @@ import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vu
 import { productImagePattern, products } from '../api'
 import { catalogueQuery } from '../router'
 import { useResource } from '../useResource'
+import InventoryAdjustmentDialog from '../components/InventoryAdjustmentDialog.vue'
 import ProductThumbnail from '../components/ProductThumbnail.vue'
 import RequestState from '../components/RequestState.vue'
 import StatusBadge from '../components/StatusBadge.vue'
@@ -96,6 +97,28 @@ function moveTab(event) {
   }
   event.preventDefault()
   selectTab(tabs[next], true)
+}
+
+// Stock changed on this page, keyed by variant id. Kept apart from the
+// product record so an adjustment does not reset unsaved General tab edits.
+const adjustedInventory = ref({})
+const adjusting = ref(null)
+const adjustmentMessage = ref('')
+
+function inventoryOf(variant) {
+  return adjustedInventory.value[variant.id] || variant.inventory
+}
+
+function openAdjustment(variant) {
+  adjustmentMessage.value = ''
+  adjusting.value = variant
+}
+
+function onAdjusted(result) {
+  const variant = adjusting.value
+  adjustedInventory.value = { ...adjustedInventory.value, [variant.id]: result.inventory }
+  adjustmentMessage.value = variant.name + ' stock ' + result.type + 'd from ' +
+    result.quantity_before + ' to ' + result.quantity_after + '.'
 }
 
 function priceFor(variant, tier) {
@@ -225,23 +248,32 @@ async function save() {
 
     <section v-show="tab === 'inventory'" id="panel-inventory" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-inventory" tabindex="0">
       <h2 class="panel-heading">Variant inventory</h2>
+      <p v-if="adjustmentMessage" class="success-text adjustment-message" role="status">{{ adjustmentMessage }}</p>
       <div v-if="product.variants.length" class="table-scroll">
         <table class="data-table">
           <thead>
-            <tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col" class="numeric">Quantity</th><th scope="col" class="numeric">Reserved</th><th scope="col" class="numeric">Available</th></tr>
+            <tr><th scope="col">Variant</th><th scope="col">SKU</th><th scope="col" class="numeric">Quantity</th><th scope="col" class="numeric">Reserved</th><th scope="col" class="numeric">Available</th><th scope="col"><span class="sr-only">Actions</span></th></tr>
           </thead>
           <tbody>
             <tr v-for="variant in product.variants" :key="variant.id">
               <th scope="row">{{ variant.name }}</th>
               <td class="code">{{ variant.sku }}</td>
-              <td class="numeric">{{ variant.inventory?.quantity ?? '—' }}</td>
-              <td class="numeric">{{ variant.inventory?.reserved ?? '—' }}</td>
-              <td class="numeric">{{ variant.inventory ? variant.inventory.quantity - variant.inventory.reserved : '—' }}</td>
+              <td class="numeric">{{ inventoryOf(variant)?.quantity ?? '—' }}</td>
+              <td class="numeric">{{ inventoryOf(variant)?.reserved ?? '—' }}</td>
+              <td class="numeric">{{ inventoryOf(variant) ? inventoryOf(variant).quantity - inventoryOf(variant).reserved : '—' }}</td>
+              <td class="numeric">
+                <button class="button button-small" type="button" :disabled="!inventoryOf(variant)"
+                  :title="inventoryOf(variant) ? null : 'This variant has no inventory record.'" @click="openAdjustment(variant)">
+                  Adjust<span class="sr-only"> stock for {{ variant.name }}</span>
+                </button>
+              </td>
             </tr>
           </tbody>
         </table>
       </div>
       <p v-else class="request-state">No variants for this product.</p>
+      <InventoryAdjustmentDialog v-if="adjusting" :product-id="id" :variant="adjusting" :inventory="inventoryOf(adjusting)"
+        @saved="onAdjusted" @close="adjusting = null" />
     </section>
 
     <section v-show="tab === 'availability'" id="panel-availability" class="panel tab-panel" role="tabpanel" aria-labelledby="tab-availability" tabindex="0">

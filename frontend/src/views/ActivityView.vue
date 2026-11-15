@@ -1,7 +1,7 @@
 <script setup>
 import { computed, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { products } from '../api'
+import { adjustmentReasons, products } from '../api'
 import { catalogueQuery } from '../router'
 import { pageNumber, useResource } from '../useResource'
 import PaginationControls from '../components/PaginationControls.vue'
@@ -14,6 +14,8 @@ const page = computed(() => pageNumber(route.query.page))
 const { data: product, load: loadProduct } = useResource()
 const { data, loading, error, load } = useResource()
 const timestamp = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' })
+const actionNames = { 'product.updated': 'Product updated', 'inventory.adjusted': 'Stock adjusted' }
+const reasonNames = Object.fromEntries(Object.values(adjustmentReasons).flat().map((item) => [item.value, item.label]))
 const fieldNames = { sku: 'SKU', name: 'Product name', category_id: 'Category ID', image_url: 'Image path' }
 
 function fetchActivity() {
@@ -58,10 +60,16 @@ watch(page, fetchActivity, { immediate: true })
           </thead>
           <tbody>
             <tr v-for="record in data.results" :key="record.id">
-              <th scope="row">{{ record.action === 'product.updated' ? 'Product updated' : record.action }}</th>
+              <th scope="row">{{ actionNames[record.action] || record.action }}</th>
               <td>{{ record.actor || 'Unknown' }}</td>
               <td><time :datetime="record.created_at">{{ timestamp.format(new Date(record.created_at)) }}</time></td>
               <td>
+                <p v-if="record.action === 'inventory.adjusted'" class="adjustment-summary">
+                  <span class="code">{{ record.details.variant_sku }}</span>
+                  <span class="title-case"> · {{ record.details.type }} of {{ record.details.quantity }}</span>
+                  · {{ reasonNames[record.details.reason] || record.details.reason }}
+                  <template v-if="record.details.note">: {{ record.details.note }}</template>
+                </p>
                 <dl v-if="record.details?.changes && Object.keys(record.details.changes).length" class="change-list">
                   <div v-for="(change, field) in record.details.changes" :key="field">
                     <dt class="title-case">{{ fieldNames[field] || field.replaceAll('_', ' ') }}</dt>
